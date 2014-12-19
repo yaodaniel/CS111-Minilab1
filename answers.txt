@@ -1,0 +1,192 @@
+Name: Daniel Yao
+UCLA ID: 004-184-464
+
+Collaborators: TAs
+
+-------------------------------------------------------------------------------
+
+Response to Exercise 1:
+
+Yes and no, since each process has its own copies of reg_eax, running another 
+process before finishing the current process should not change reg_eax held by
+the process. But then again, in exercise 5, the spec does say that our OS does not
+practice true process isolation, so if if we have a child process of the current 
+process, then reg_eax could be potentially affected.
+
+
+
+Response to Exercise 2:
+
+Solution is written in mpos-kern.c
+
+
+
+Response to Exercise 3:
+
+I created another data member of the process struct of type struct process*.
+This new data member is used to store any process waiting for the current to finish.
+Inside mpos-kern.c I set the current's state to P_BLOCKED and set process p's new
+data member to be current.
+
+So, process p will run while current is on hold. When p exits, I check if its new
+data member is not NULL. If it isn't, I set the data member's state to P_RUNNABLE
+and set its eax reg to be process p's exit status.
+
+
+
+Response to Exercise 4:
+
+The bug is caused by the fact that the process states were not set back to P_EMPTY,
+so they were seen as still used. To fix this bug, inside INT_SYS_EXIT case, I added
+current->p_state = P_EMPTY right before schedule(), so that the exiting process'
+state is set to EMPTY and can be reused.
+
+
+
+Response to Exercise 5:
+
+	int x = 0;  //note that local variable x lives on the stack 
+        int * volatile ptr = &x; //pointer to a volatile int
+        pid_t p = sys_fork();
+        if (p == 0) {
+		x++;
+		*ptr = 1;
+	}
+        else if (p > 0)
+                sys_wait(p); // assume blocking implementation
+        app_printf("%d", x);
+        sys_exit(0);
+
+
+
+Response to Exercise 6:
+
+Inside mpos.h:
+ added on line: 13
+    #define INT_SYS_NEW_THREAD	   53
+
+Inside mpos-app.h:
+ added on lines: 56-64
+	static inline pid_t sys_newthread(void (*start_function)(void)) {
+		pid_t result;
+		asm volatile("int %1\n"
+			     : "=a" (result)
+			     : "i" (INT_SYS_NEW_THREAD),
+			       "b" (start_function)
+			     : "cc", "memory");
+		return result;
+	}
+
+Inside mpos-kern.c:
+  added the following code after the do_fork inline line:128
+	static pid_t do_newThread(process_t  *current, void* startFunction);
+
+  add the case below inside interrupt() lines: 143-145
+
+	case INT_SYS_NEW_THREAD:
+		current->p_registers.reg_eax = do_newThread(current, current->p_registers.reg_ebx);
+		run(current);
+
+  add the following code too on lines: 217-235
+  
+   static pid_t
+   do_newThread(process_t* current, int startFunction) {
+	process_t* avail;
+	int offset = 1;
+	while(1) {
+	    if(offset == NPROCS) { return -1; } //No empty process descriptor
+	    avail = &(proc_array[offset]);
+	    if(avail-> p_state == P_EMPTY){
+		avail->p_registers = current->p_registers;
+		avail->p_registers.reg_eax = 0;
+		avail->p_registers.reg_eip = startFunction;
+		avail->p_state = P_RUNNABLE;
+		return avail->p_pid;
+	    }
+	  ++offset;
+	}
+	
+  return -1;
+}
+
+
+
+Response to Exercise 7:
+
+Added inside mpos.h line: 14
+#define INT_SYS_KILL		54
+
+and on line: 34
+#define KILLED			(-3)
+
+added inside mpos-app.h lines: 66-74
+
+static inline int sys_kill(pid_t pid) {
+	int result;
+	asm volatile("int %1\n"
+			: "=a" (result)
+			: "i" (INT_SYS_KILL),
+			  "a" (pid)
+			: "cc", "memory");
+	return result;
+}
+
+
+added inside mpos-kern.c lines: 147-170
+
+case INT_SYS_KILL: {
+		pid_t processToKill = current->p_registers.reg_eax;
+		process_t* GG = &proc_array[processToKill];
+
+		if (processToKill <= 0 || processToKill >= NPROCS || processToKill == current->p_pid
+		    || GG->p_state == P_EMPTY)
+			current->p_registers.reg_eax = -1;
+		else if (GG->p_state != P_ZOMBIE) { //TIME TO KILL! MUHAHAHA
+
+			GG->p_state = P_EMPTY; //Free up for other use
+			GG->p_exit_status = KILLED; //GG		
+
+			//Consider any process waiting for this one to finish
+			if(GG->waiting != NULL) {
+		   		GG->waiting->p_state = P_RUNNABLE;
+		  		GG->waiting->p_registers.reg_eax = GG->p_exit_status;
+			}
+		   current->p_registers.reg_eax = 0; //Our process returned with no errors
+		}
+		else { //Process' already dead so...
+			current->p_registers.reg_eax = 0; //Our process returned with no errors
+		}
+		run(current);
+	}
+
+
+added inside mpos-app2.c lines: 64-71
+
+if ((sys_getpid() % 2) == 0 && NPROCS > 2)
+	{
+		int pidToKill;
+		for (pidToKill = 3; pidToKill < NPROCS; pidToKill += 2)
+		{
+			sys_kill(pidToKill);
+		}
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Anything else you'd like us to know:
+
+
+
+Extra credit exercises:
